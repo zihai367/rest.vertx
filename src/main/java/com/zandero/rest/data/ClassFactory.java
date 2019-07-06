@@ -443,6 +443,27 @@ public abstract class ClassFactory<T> {
 		return null;
 	}
 
+	public static <T> Object constructType(Class<T> type) throws ClassFactoryException {
+		Assert.notNull(type, "Missing type!");
+
+		Constructor[] allConstructors = type.getDeclaredConstructors();
+		for (Constructor ctor : allConstructors) {
+
+			Class<?>[] pType = ctor.getParameterTypes();
+			if (pType.length == 0) { // ok ... match ... might be possible to use
+				try {
+					return ctor.newInstance();
+				}
+				catch (IllegalAccessException | InstantiationException | InvocationTargetException e) {
+					break;
+				}
+			}
+		}
+
+		log.warn("Failed constructing: " + type.getName() + ", expecting public empty constructor!");
+		throw new ClassFactoryException("Failed constructing: " + type.getName() + ", expecting public empty constructor!", null);
+	}
+
 	/**
 	 * Aims to construct given type utilizing a constructor that takes String or other primitive type values
 	 *
