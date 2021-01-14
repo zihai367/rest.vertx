@@ -1,5 +1,5 @@
 # Rest.Vertx
-Lightweight JAX-RS (RestEasy) like annotation processor for vert.x verticals
+Lightweight JAX-RS (RestEasy) like annotation processor for vert.x verticles
 
 **Rest.Vertx** is still in beta, so please report any [issues](https://github.com/zandero/rest.vertx/issues) discovered.  
 You are highly encouraged to participate and improve upon the existing code.
@@ -12,7 +12,7 @@ If this project help you reduce time to develop? Keep it running and donate for 
 <dependency>      
      <groupId>com.zandero</groupId>      
      <artifactId>rest.vertx</artifactId>      
-     <version>0.8.9</version>      
+     <version>0.9.1</version>      
 </dependency>
 ```
 
@@ -282,6 +282,8 @@ Basic (primitive) types are converted from string to given type - if conversion 
  
 Complex java objects are converted according to **@Consumes** annotation or **@RequestReader** _request body reader_ associated.
 
+Complex java object annotated with **@BeanParam** annotation holding fields annotated with @PathParam, @QueryParam ...  
+
 **Option 1** - The **@Consumes** annotation **mime/type** defines the reader to be used when converting request body.  
 In this case a build in JSON converter is applied.
 ```java
@@ -365,6 +367,55 @@ First appropriate reader is assigned searching in following order:
 1. use class type specific ValueReader
 1. use mime type assigned ValueReader
 1. use general purpose ValueReader
+
+**Option 5** - **@BeanParam** argument is constructed via vert.x RoutingContext.
+>since version 0.9.0 or later
+
+```java
+    @POST
+    @Path("/read/{param}")
+    public String read(@BeanParam BeanClazz bean) {
+        ...
+    }
+```  
+
+```java
+public class BeanClazz {
+    @PathParam("param")
+    private String path;
+
+    @QueryParam("query")
+    @Raw
+    private String query;
+
+    @HeaderParam("x-token")
+    private String token;
+
+    @CookieParam("chocolate")
+    private String cookie;
+
+    @MatrixParam("enum")
+    private MyEnum enumValue;
+
+    @FormParam("form")
+    private String form;
+
+    @BodyParam
+    @DefaultValue("empty")
+    private String body;
+}
+```
+
+OR via constructor
+```java
+public BeanClazz(@PathParam("param") String path,
+                  @HeaderParam("x-token") boolean xToken,
+                  @QueryParam("query") @Raw int query,
+                  @CookieParam("chocolate") String cookie) {
+    ...
+}
+```
+
 
 #### Missing ValueReader?
 
@@ -614,6 +665,29 @@ A custom context reader can be applied to a @Context annotated variable to overr
 ```
 
  
+## Body handler
+> version 0.9.1 or later
+
+In case needed a custom body handler can be provided for all body handling requests.
+
+```java
+    BodyHandler bodyHandler = BodyHandler.create("my_upload_folder");
+    RestRouter.setBodyHandler(bodyHandler);
+
+    Router router = RestRouter.register(vertx, UploadFileRest.class);
+```
+
+or
+
+```java
+    BodyHandler handler = BodyHandler.create("my_upload_folder");
+
+    Router router = new RestBuilder(vertx)
+        .bodyHandler(handler)
+        .register(UploadFileRest.class)
+        .build();
+
+```
 
 ## Response building
 
@@ -1408,7 +1482,7 @@ Following is a simple implementation of a Guice injection provider.
 ```java
 public class GuiceInjectionProvider implements InjectionProvider {
 
-	private Injector injector;
+	private final Injector injector;
 
 	public GuiceInjectionProvider(Module[] modules) {
 		injector = Guice.createInjector(modules);
@@ -1633,5 +1707,6 @@ or even:
 public String method() { ... }
 ```
 
+# Request/Response rest.vertx lifecycle
 
-
+TODO: describe request/response lifecycle

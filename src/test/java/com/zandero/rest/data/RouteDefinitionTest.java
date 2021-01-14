@@ -4,11 +4,9 @@ import com.zandero.rest.AnnotationProcessor;
 import com.zandero.rest.annotation.RouteOrder;
 import com.zandero.rest.test.*;
 import com.zandero.rest.test.json.Dummy;
-import io.vertx.core.CompositeFuture;
-import io.vertx.core.Future;
+import io.vertx.core.*;
 import io.vertx.core.http.HttpMethod;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 
 import java.lang.reflect.Method;
 import java.util.*;
@@ -21,145 +19,145 @@ import static org.junit.Assert.*;
  */
 class RouteDefinitionTest {
 
-	@Test
-	void getDefinitionTest() throws NoSuchMethodException {
+    @Test
+    void getDefinitionTest() throws NoSuchMethodException {
 
-		RouteDefinition base = new RouteDefinition(TestRest.class);
+        RouteDefinition base = new RouteDefinition(TestRest.class);
 
-		assertEquals("/test", base.getPath());
+        assertEquals("/test", base.getPath());
 
-		assertNotNull(base.getProduces());
-		assertEquals(1, base.getProduces().length);
+        assertNotNull(base.getProduces());
+        assertEquals(1, base.getProduces().length);
 
-		assertNull(base.getMethod());
-		assertNull(base.getConsumes());
+        assertNull(base.getMethod());
+        assertNull(base.getConsumes());
 
-		// 2.
-		Method method = TestRest.class.getMethod("echo");
-		RouteDefinition def = new RouteDefinition(base, method);
+        // 2.
+        Method method = TestRest.class.getMethod("echo");
+        RouteDefinition def = new RouteDefinition(base, method);
 
-		assertEquals("/test/echo", def.getPath());
+        assertEquals("/test/echo", def.getPath());
 
-		assertNotNull(def.getProduces());
-		assertEquals(1, def.getProduces().length);
+        assertNotNull(def.getProduces());
+        assertEquals(1, def.getProduces().length);
 
-		assertEquals(HttpMethod.GET, def.getMethod());
+        assertEquals(HttpMethod.GET, def.getMethod());
 
-		assertNull(def.getConsumes());
-	}
+        assertNull(def.getConsumes());
+    }
 
-	@Test
-	void emptyRootPath() throws NoSuchMethodException {
+    @Test
+    void emptyRootPath() throws NoSuchMethodException {
 
-		RouteDefinition base = new RouteDefinition(TestEchoRest2.class);
-		assertEquals("/test", base.getPath());
+        RouteDefinition base = new RouteDefinition(TestEchoRest2.class);
+        assertEquals("/test", base.getPath());
 
-		Method method = TestEchoRest2.class.getMethod("bla");
-		RouteDefinition def = new RouteDefinition(base, method);
+        Method method = TestEchoRest2.class.getMethod("bla");
+        RouteDefinition def = new RouteDefinition(base, method);
 
-		assertEquals("/test/bla", def.getPath());
-	}
+        assertEquals("/test/bla", def.getPath());
+    }
 
-	@Test
-	void getBodyParamTest() {
+    @Test
+    void getBodyParamTest() {
 
-		RouteDefinition base = new RouteDefinition(TestPostRest.class);
+        RouteDefinition base = new RouteDefinition(TestPostRest.class);
 
-		Method[] methods = TestPostRest.class.getMethods();
+        Method[] methods = TestPostRest.class.getMethods();
 
-		Arrays.sort(methods, Comparator.comparingInt(method -> {
-			RouteOrder order = method.getAnnotation(RouteOrder.class);
-			return order == null ? 100 : order.value();
-		}));
+        Arrays.sort(methods, Comparator.comparingInt(method -> {
+            RouteOrder order = method.getAnnotation(RouteOrder.class);
+            return order == null ? 100 : order.value();
+        }));
 
-		// 1.
-		Method method = methods[0];
-		RouteDefinition def = new RouteDefinition(base, method);
+        // 1.
+        Method method = methods[0];
+        RouteDefinition def = new RouteDefinition(base, method);
 
-		//def.setArguments(method);
+        //def.setArguments(method);
 
-		assertEquals("/post/json", def.getPath());
-		assertEquals(HttpMethod.POST, def.getMethod());
+        assertEquals("/post/json", def.getPath());
+        assertEquals(HttpMethod.POST, def.getMethod());
 
-		assertEquals(2, def.getParameters().size());
+        assertEquals(2, def.getParameters().size());
 
-		MethodParameter param = def.getParameters().get(0);
-		assertEquals("arg0", param.getName());
-		assertEquals(ParameterType.unknown, param.getType()); // to be proclaimed as body by annotation processor
-		assertEquals(Dummy.class, param.getDataType());
-		assertNull(param.getDefaultValue());
+        MethodParameter param = def.getParameters().get(0);
+        assertEquals("arg0", param.getName());
+        assertEquals(ParameterType.unknown, param.getType()); // to be proclaimed as body by annotation processor
+        assertEquals(Dummy.class, param.getDataType());
+        assertNull(param.getDefaultValue());
 
-		param = def.getParameters().get(1);
-		assertEquals("X-Test", param.getName());
-		assertEquals(ParameterType.header, param.getType());
-		assertEquals(String.class, param.getDataType());
-		assertNull(param.getDefaultValue());
-	}
+        param = def.getParameters().get(1);
+        assertEquals("X-Test", param.getName());
+        assertEquals(ParameterType.header, param.getType());
+        assertEquals(String.class, param.getDataType());
+        assertNull(param.getDefaultValue());
+    }
 
-	// Test sometimes flaky as sorting of methods doesn't seem to work
-	// ...
-	@Test
-	void regExDefinitionTest() {
+    // Test sometimes flaky as sorting of methods doesn't seem to work
+    // ...
+    @Test
+    void regExDefinitionTest() {
 
-		RouteDefinition base = new RouteDefinition(TestRegExRest.class);
+        RouteDefinition base = new RouteDefinition(TestRegExRest.class);
 
-		List<Method> methods = new ArrayList<>(Arrays.asList(TestRegExRest.class.getMethods()));
-		// sort methods by name to prevent flakiness of test
-		methods.sort(Comparator.comparing(Method::getName));
-
-
-		Method method = TestRegExRest.class.getMethods()[0];
-		RouteDefinition def = new RouteDefinition(base, method);
-		assertEquals("/regEx/{one:\\w+}/{two:\\d+}/{three:\\w+}", def.getPath());
-		assertEquals("/regEx/\\w+/\\d+/\\w+", def.getRoutePath());
-		assertTrue(def.pathIsRegEx());
-
-		method = TestRegExRest.class.getMethods()[1];
-		def = new RouteDefinition(base, method);
-		assertEquals("/regEx/:one:\\d+", def.getPath());
-		assertEquals("/regEx/\\d+", def.getRoutePath());
-		assertTrue(def.pathIsRegEx());
+        List<Method> methods = new ArrayList<>(Arrays.asList(TestRegExRest.class.getMethods()));
+        // sort methods by name to prevent flakiness of test
+        methods.sort(Comparator.comparing(Method::getName));
 
 
-		method = TestRegExRest.class.getMethods()[2];
-		def = new RouteDefinition(base, method);
-		assertTrue(def.pathIsRegEx());
-		assertEquals("/regEx/:one:\\d+/minus/:two:\\d+", def.getPath());
-		assertEquals("/regEx/\\d+/minus/\\d+", def.getRoutePath());
+        Method method = methods.get(0);
+        RouteDefinition def = new RouteDefinition(base, method);
+        assertEquals("/regEx/{one:\\w+}/{two:\\d+}/{three:\\w+}", def.getPath());
+        assertEquals("/regEx/\\w+/\\d+/\\w+", def.getRoutePath());
+        assertTrue(def.pathIsRegEx());
 
-		method = TestRegExRest.class.getMethods()[3];
-		def = new RouteDefinition(base, method);
-		assertTrue(def.pathIsRegEx());
+        method = methods.get(1);
+        def = new RouteDefinition(base, method);
+        assertEquals("/regEx/:one:\\d+", def.getPath());
+        assertEquals("/regEx/\\d+", def.getRoutePath());
+        assertTrue(def.pathIsRegEx());
 
-		assertEquals("/regEx/{path:(?!api\\/).*}", def.getPath());
-		assertEquals( "/regEx/(?!api\\/).*", def.getRoutePath());
-	}
+        method = methods.get(2);
+        def = new RouteDefinition(base, method);
+        assertTrue(def.pathIsRegEx());
+        assertEquals("/regEx/:one:\\d+/minus/:two:\\d+", def.getPath());
+        assertEquals("/regEx/\\d+/minus/\\d+", def.getRoutePath());
 
-	@Test
-	void missingArgumentAnnotationTest() {
+        method = methods.get(3);
+        def = new RouteDefinition(base, method);
+        assertTrue(def.pathIsRegEx());
 
-		try {
-			AnnotationProcessor.get(TestMissingAnnotationsRest.class);
-			fail();
-		} catch (IllegalArgumentException e) {
-			assertEquals("com.zandero.rest.test.TestMissingAnnotationsRest.returnOuch(String arg0) - " +
-			             "Missing argument annotation (@PathParam, @QueryParam, @FormParam, @HeaderParam, @CookieParam or @Context) for: arg0!",
-			             e.getMessage());
-		}
-	}
+        assertEquals("/regEx/{path:(?!api\\/).*}", def.getPath());
+        assertEquals("/regEx/(?!api\\/).*", def.getRoutePath());
+    }
 
-	@Test
-	void isAsyncTest() {
+    /*@Disabled // issue #59 get requests can have a body
+    @Test
+    void missingArgumentAnnotationTest() {
 
-		Future<String> out = Future.future();
-		CompositeFuture out2 = CompositeFuture.all(out, out);
+        try {
+            AnnotationProcessor.get(TestMissingAnnotationsRest.class);
+            fail();
+        } catch (IllegalArgumentException e) {
+            assertEquals("com.zandero.rest.test.TestMissingAnnotationsRest.returnOuch(String arg0) - " +
+                             "Missing argument annotation (@PathParam, @QueryParam, @FormParam, @HeaderParam, @CookieParam or @Context) for: arg0!",
+                         e.getMessage());
+        }
+    }*/
 
-		CompletableFuture<String> complete = new CompletableFuture<>();
+    @Test
+    void isAsyncTest() {
 
-		assertTrue(RouteDefinition.isAsync(out.getClass()));
-		assertTrue(RouteDefinition.isAsync(out2.getClass()));
+        Future<String> out = Future.future();
+        CompositeFuture out2 = CompositeFuture.all(out, out);
 
-		assertFalse(RouteDefinition.isAsync(complete.getClass()));
-		assertFalse(RouteDefinition.isAsync(String.class));
-	}
+        CompletableFuture<String> complete = new CompletableFuture<>();
+
+        assertTrue(RouteDefinition.isAsync(out.getClass()));
+        assertTrue(RouteDefinition.isAsync(out2.getClass()));
+
+        assertFalse(RouteDefinition.isAsync(complete.getClass()));
+        assertFalse(RouteDefinition.isAsync(String.class));
+    }
 }

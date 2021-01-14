@@ -1,317 +1,321 @@
 package com.zandero.rest.data;
 
+import com.zandero.rest.bean.BeanProvider;
+import com.zandero.rest.cache.*;
 import com.zandero.rest.context.ContextProvider;
-import com.zandero.rest.context.ContextProviderFactory;
 import com.zandero.rest.exception.ContextException;
 import com.zandero.rest.injection.InjectionProvider;
-import com.zandero.rest.reader.ReaderFactory;
 import com.zandero.rest.reader.ValueReader;
-import com.zandero.utils.Assert;
-import com.zandero.utils.StringUtils;
+import com.zandero.utils.*;
 import com.zandero.utils.extra.UrlUtils;
-import io.vertx.core.http.HttpServerRequest;
-import io.vertx.ext.web.Cookie;
+import io.vertx.core.http.*;
 import io.vertx.ext.web.RoutingContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.slf4j.*;
 
+import javax.ws.rs.core.MediaType;
 import java.io.UnsupportedEncodingException;
-import java.lang.reflect.Method;
-import java.lang.reflect.Parameter;
+import java.lang.reflect.*;
 import java.net.URLDecoder;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 /**
  * Extracts arguments to be provided for given method from definition and current context (request)
  */
 public class ArgumentProvider {
 
-	private final static Logger log = LoggerFactory.getLogger(ArgumentProvider.class);
+    private final static Logger log = LoggerFactory.getLogger(ArgumentProvider.class);
 
-	@SuppressWarnings("unchecked")
-	public static Object[] getArguments(Method method,
-	                                    RouteDefinition definition,
-	                                    RoutingContext context,
-	                                    ReaderFactory readers,
-	                                    ContextProviderFactory providerFactory,
-	                                    InjectionProvider injectionProvider) throws Throwable {
+    @SuppressWarnings("unchecked")
+    // TODO: split up method ... to long
+    public static Object[] getArguments(Method method,
+                                        RouteDefinition definition,
+                                        RoutingContext context,
+                                        ReaderCache readers,
+                                        ContextProviderCache providerFactory,
+                                        InjectionProvider injectionProvider,
+                                        BeanProvider beanProvider) throws Throwable {
 
-		Assert.notNull(method, "Missing method to provide arguments for!");
-		Assert.notNull(definition, "Missing route definition!");
-		Assert.notNull(context, "Missing vert.x routing context!");
+        Assert.notNull(method, "Missing method to provide arguments for!");
+        Assert.notNull(definition, "Missing route definition!");
+        Assert.notNull(context, "Missing vert.x routing context!");
 
-		Class<?>[] methodArguments = method.getParameterTypes();
+        Class<?>[] methodArguments = method.getParameterTypes();
 
-		if (methodArguments.length == 0) {
-			return null;    // no arguments needed ...
-		}
+        if (methodArguments.length == 0) {
+            return null;    // no arguments needed ...
+        }
 
-		// get parameters and extract from request their values
-		List<MethodParameter> params = definition.getParameters(); // returned sorted by index
+        // get parameters and extract from request their values
+        List<MethodParameter> params = definition.getParameters(); // returned sorted by index
 
-		Object[] args = new Object[methodArguments.length];
+        Object[] args = new Object[methodArguments.length];
 
-		for (MethodParameter parameter : params) {
+        for (MethodParameter parameter : params) {
 
-			if (!parameter.isUsedAsArgument()) {
-				continue;
-			}
+            if (!parameter.isUsedAsArgument()) {
+                continue;
+            }
 
-			// set if we have a place to set it ... otherwise ignore
-			if (parameter.getIndex() < args.length) {
+            // set if we have a place to set it ... otherwise ignore
+            if (parameter.getIndex() < args.length) {
 
-				// get value
-				String value = getValue(definition, parameter, context, parameter.getDefaultValue());
+                // get value
+                String value = getValue(definition, parameter, context, parameter.getDefaultValue());
 
-				Class<?> dataType = parameter.getDataType();
-				if (dataType == null) {
-					dataType = methodArguments[parameter.getIndex()];
-				}
+                Class<?> dataType = parameter.getDataType();
+                if (dataType == null) {
+                    dataType = methodArguments[parameter.getIndex()];
+                }
 
-				try {
-					switch (parameter.getType()) {
+                try {
+                    switch (parameter.getType()) {
 
-						/*case bean :
+                        case bean:
 
-							// TODO : initialize bean
-                            BeanProvider beanProvider = providerFactory.get(dataType, injectionProvider, context, null);
                             if (beanProvider != null) {
-                                Object result = beanProvider.provide(context.request());
+                                Object result = beanProvider.provide(dataType, context, injectionProvider);
+                                args[parameter.getIndex()] = result;
+                            }
+
+                            break;
+
+                        case context:
+
+                            // check if providers need to be called to assure context
+                            ContextProvider provider = (ContextProvider) ClassFactory.get(dataType, providerFactory, parameter.getContextProvider(), injectionProvider, context, null);
+                            if (provider != null) {
+                                Object result = provider.provide(context.request());
                                 if (result != null) {
-                                    context.data().put(ContextProviderFactory.getContextKey(dataType), result);
+                                    context.data().put(ContextProviderCache.getContextDataKey(dataType), result);
                                 }
                             }
 
-                            args[parameter.getIndex()] = ContextProviderFactory.provideContext(method.getParameterTypes()[parameter.getIndex()],
-                                    parameter.getDefaultValue(),
-                                    context);
+                            args[parameter.getIndex()] = ContextProviderCache.provideContext(method.getParameterTypes()[parameter.getIndex()],
+                                                                                             parameter.getDefaultValue(),
+                                                                                             definition,
+                                                                                             context);
+                            break;
 
-							break;*//**/
-						case context:
+                        default:
 
-							// check if providers need to be called to assure context
-							ContextProvider provider = providerFactory.get(dataType, parameter.getContextProvider(), injectionProvider, context, null);
-							if (provider != null) {
-								Object result = provider.provide(context.request());
-								if (result != null) {
-									context.data().put(ContextProviderFactory.getContextKey(dataType), result);
-								}
-							}
+                            ValueReader valueReader = getValueReader(injectionProvider, parameter, definition, context, readers);
+                            args[parameter.getIndex()] = valueReader.read(value, dataType);
+                            break;
+                    }
+                } catch (Throwable e) {
 
-							args[parameter.getIndex()] = ContextProviderFactory.provideContext(method.getParameterTypes()[parameter.getIndex()],
-							                                                                   parameter.getDefaultValue(),
-							                                                                   context);
-							break;
+                    if (e instanceof ContextException) {
+                        log.error(e.getMessage());
+                        throw new IllegalArgumentException(e.getMessage());
+                    }
 
-						default:
+                    if (e instanceof IllegalArgumentException) {
 
-							ValueReader valueReader = getValueReader(injectionProvider, parameter, definition, context, readers);
-							args[parameter.getIndex()] = valueReader.read(value, dataType);
-							break;
-					}
-				}
-				catch (Throwable e) {
+                        MethodParameter paramDefinition = definition.findParameter(parameter.getIndex());
+                        String expectedType = method.getParameterTypes()[parameter.getIndex()].getTypeName();
 
-					if (e instanceof ContextException) {
-						throw new IllegalArgumentException(e.getMessage());
-					}
+                        String error;
+                        if (paramDefinition != null) {
+                            error =
+                                "Invalid parameter type for: " + paramDefinition + " for: " + definition.getPath() + ", expected: " + expectedType;
+                        } else {
+                            error =
+                                "Invalid parameter type for " + (parameter.getIndex() + 1) + " argument for: " + method + " expected: " +
+                                    expectedType;
+                        }
 
-					if (e instanceof IllegalArgumentException) {
+                        if (value == null) {
+                            error = error + ", but got: null";
+                        }
 
-						MethodParameter paramDefinition = definition.findParameter(parameter.getIndex());
-						String providedType = value != null ? value.getClass().getSimpleName() : "null";
-						String expectedType = method.getParameterTypes()[parameter.getIndex()].getTypeName();
+                        error = error + " -> " + e.getMessage();
+                        log.error(error);
+                    } else {
+                        log.error(e.getMessage());
+                    }
 
-						String error;
-						if (paramDefinition != null) {
-							error =
-								"Invalid parameter type for: " + paramDefinition + " for: " + definition.getPath() + ", expected: " + expectedType;
-						} else {
-							error =
-								"Invalid parameter type for " + (parameter.getIndex() + 1) + " argument for: " + method + " expected: " +
-								expectedType;
-						}
+                    throw e;
+                }
+            }
+        }
 
-						if (!StringUtils.equals(expectedType, providedType, false)) {
-							error = error + ", but got: " + providedType;
-						}
+        // parameter check ...
+        for (int index = 0; index < args.length; index++) {
+            Parameter param = method.getParameters()[index];
+            if (args[index] == null && param.getType().isPrimitive()) {
 
-						error = error + " -> " + e;
+                MethodParameter paramDefinition = definition.findParameter(index);
+                if (paramDefinition != null) {
+                    throw new IllegalArgumentException("Missing " + paramDefinition + " for: " + definition.getPath());
+                }
 
-						throw new IllegalArgumentException(error, e);
-					}
+                throw new IllegalArgumentException("Missing " + (index + 1) + " argument for: " + method +
+                                                       " expected: " + param.getType() + ", but: null was provided!");
+            }
+        }
 
-					throw e;
-				}
-			}
-		}
+        return args;
+    }
 
-		// parameter check ...
-		for (int index = 0; index < args.length; index++) {
-			Parameter param = method.getParameters()[index];
-			if (args[index] == null && param.getType().isPrimitive()) {
+    public static String getValue(RouteDefinition definition, MethodParameter param, RoutingContext context, String defaultValue) {
 
-				MethodParameter paramDefinition = definition.findParameter(index);
-				if (paramDefinition != null) {
-					throw new IllegalArgumentException("Missing " + paramDefinition + " for: " + definition.getPath());
-				}
+        String value = getValue(definition, param, context);
 
-				throw new IllegalArgumentException("Missing " + (index + 1) + " argument for: " + method +
-				                                   " expected: " + param.getType() + ", but: null was provided!");
-			}
-		}
+        if (value == null) {
+            return defaultValue;
+        }
 
-		return args;
-	}
+        return value;
+    }
 
-	private static String getValue(RouteDefinition definition, MethodParameter param, RoutingContext context, String defaultValue) {
+    // TODO: split up .. to getPath(), getQuery() ...
+    private static String getValue(RouteDefinition definition, MethodParameter param, RoutingContext context) {
 
-		String value = getValue(definition, param, context);
+        switch (param.getType()) {
+            case path:
 
-		if (value == null) {
-			return defaultValue;
-		}
+                String path;
+                if (definition != null && definition.pathIsRegEx()) { // RegEx is special, params values are given by index
+                    path = getParam(context.mountPoint(), context.request(), param.getPathIndex());
+                } else {
+                    path = context.request().getParam(param.getName());
+                }
 
-		return value;
-	}
+                // if @MatrixParams are present ... those need to be removed
+                if (definition != null) {
+                    path = removeMatrixFromPath(path, definition);
+                }
+                return path;
 
-	private static String getValue(RouteDefinition definition, MethodParameter param, RoutingContext context) {
+            case query:
+                Map<String, String> query = UrlUtils.getQuery(context.request().query());
+                String value = query.get(param.getName());
 
-		switch (param.getType()) {
-			case path:
+                // user specified @Raw annotation ... provide as it is
+                if (param.isRaw()) {
+                    return value;
+                }
 
-				String path;
-				if (definition.pathIsRegEx()) { // RegEx is special, params values are given by index
-					path = getParam(context.mountPoint(), context.request(), param.getPathIndex());
-				} else {
-					path = context.request().getParam(param.getName());
-				}
+                // by default decode
+                if (!StringUtils.isNullOrEmptyTrimmed(value)) {
+                    try {
+                        return URLDecoder.decode(value, "UTF-8");
+                    } catch (UnsupportedEncodingException e) {
+                        log.warn("Failed to decode query: " + value, e);
+                    }
+                }
 
-				// if @MatrixParams are present ... those need to be removed
-				path = removeMatrixFromPath(path, definition);
-				return path;
+                return value;
 
-			case query:
-				Map<String, String> query = UrlUtils.getQuery(context.request().query());
-				String value = query.get(param.getName());
+            case cookie:
+                Cookie cookie = context.request().getCookie(param.getName());
+                return cookie == null ? null : cookie.getValue();
 
-				// user specified @Raw annotation ... provide as it is
-				if (param.isRaw()) {
-					return value;
-				}
+            case form:
+                return context.request().getFormAttribute(param.getName());
 
-				// by default decode
-				if (!StringUtils.isNullOrEmptyTrimmed(value)) {
-					try {
-						return URLDecoder.decode(value, "UTF-8");
-					}
-					catch (UnsupportedEncodingException e) {
-						log.warn("Failed to decode query: " + value, e);
-					}
-				}
+            case matrix:
+                return getMatrixParam(context.request().path(), param.getName());
 
-				return value;
+            case header:
+                return context.request().getHeader(param.getName());
 
-			case cookie:
-				Cookie cookie = context.getCookie(param.getName());
-				return cookie == null ? null : cookie.getValue();
+            case body:
+                return StringUtils.trimToNull(context.getBodyAsString());
 
-			case form:
-				return context.request().getFormAttribute(param.getName());
+            default:
+                return null;
+        }
+    }
 
-			case matrix:
-				return getMatrixParam(context.request(), param.getName());
+    private static ValueReader getValueReader(InjectionProvider provider,
+                                              MethodParameter parameter,
+                                              RouteDefinition definition,
+                                              RoutingContext context,
+                                              ReaderCache readers) {
 
-			case header:
-				return context.request().getHeader(param.getName());
+        // get associated reader set in parameter
+        MediaType[] consumes = parameter.isBody() ? definition.getConsumes() : null;
+        return readers.get(parameter, provider, context, consumes);
+    }
 
-			case body:
-				return context.getBodyAsString();
+    /**
+     * Parse param from path
+     *
+     * @param mountPoint prefix
+     * @param request    http request
+     * @param index      param index
+     * @return found param or null if none found
+     */
+    private static String getParam(String mountPoint, HttpServerRequest request, int index) {
 
-			default:
-				return null;
-		}
-	}
+        String param = request.getParam("param" + index); // default mount of params without name param0, param1 ...
+        if (param == null) { // failed to get directly ... try from request path
 
-	private static ValueReader getValueReader(InjectionProvider provider,
-	                                          MethodParameter parameter,
-	                                          RouteDefinition definition,
-	                                          RoutingContext context,
-	                                          ReaderFactory
-		                                          readers) {
+            String path = removeMountPoint(mountPoint, request.path());
 
-		// get associated reader set in parameter
-		if (parameter.isBody()) {
-			return readers.get(parameter, parameter.getReader(), provider, context, definition.getConsumes());
-		} else {
-			return readers.get(parameter, parameter.getReader(), provider, context);
-		}
-	}
+            String[] items = path.split("/");
+            if (index >= 0 && index < items.length) { // simplistic way to find param value from path by index
+                return items[index];
+            }
+        }
 
-	private static String getParam(String mountPoint, HttpServerRequest request, int index) {
+        return null;
+    }
 
-		String param = request.getParam("param" + index); // default mount of params without name param0, param1 ...
-		if (param == null) { // failed to get directly ... try from request path
+    /**
+     * Removes path prefix from whole path
+     *
+     * @param mountPoint prefix
+     * @param path       whole path
+     * @return left over path
+     */
+    private static String removeMountPoint(String mountPoint, String path) {
 
-			String path = removeMountPoint(mountPoint, request.path());
+        if (StringUtils.isNullOrEmptyTrimmed(mountPoint)) {
+            return path;
+        }
 
-			String[] items = path.split("/");
-			if (index >= 0 && index < items.length) { // simplistic way to find param value from path by index
-				return items[index];
-			}
-		}
+        return path.substring(mountPoint.length());
+    }
 
-		return null;
-	}
+    /**
+     * Removes matrix params from path
+     *
+     * @param path       to clean up
+     * @param definition to check if matrix params are present
+     * @return cleaned up path
+     */
+    private static String removeMatrixFromPath(String path, RouteDefinition definition) {
 
-	private static String removeMountPoint(String mountPoint, String path) {
+        // simple removal ... we don't care what matrix attributes were given
+        if (definition.hasMatrixParams()) {
+            int index = path.indexOf(";");
+            if (index > 0) {
+                return path.substring(0, index);
+            }
+        }
 
-		if (StringUtils.isNullOrEmptyTrimmed(mountPoint)) {
-			return path;
-		}
+        return path;
+    }
 
-		return path.substring(mountPoint.length());
-	}
+    /**
+     * @param path to extract matrix parameter from (URL)
+     * @param name of desired matrix parameter
+     * @return found parameter value or null if none found
+     */
+    // TODO: this might be slow at times ... pre-parse matrix into hash map ... and store
+    private static String getMatrixParam(String path, String name) {
 
-	/**
-	 * Removes matrix params from path
-	 *
-	 * @param path       to clean up
-	 * @param definition to check if matrix params are present
-	 * @return cleaned up path
-	 */
-	private static String removeMatrixFromPath(String path, RouteDefinition definition) {
+        // get URL ... and find ;name=value pair
+        String[] items = path.split(";");
+        for (String item : items) {
+            String[] nameValue = item.split("=");
+            if (nameValue.length == 2 && nameValue[0].equals(name)) {
+                return nameValue[1];
+            }
+        }
 
-		// simple removal ... we don't care what matrix attributes were given
-		if (definition.hasMatrixParams()) {
-			int index = path.indexOf(";");
-			if (index > 0) {
-				return path.substring(0, index);
-			}
-		}
-
-		return path;
-	}
-
-	/**
-	 * @param request to extract matrix parameter from (URL)
-	 * @param name    of desired matrix parameter
-	 * @return found parameter value or null if none found
-	 */
-	// TODO: this might be slow at times ... pre-parse matrix into hash map ... and store
-	private static String getMatrixParam(HttpServerRequest request, String name) {
-
-		// get URL ... and find ;name=value pair
-		String url = request.uri();
-		String[] items = url.split(";");
-		for (String item : items) {
-			String[] nameValue = item.split("=");
-			if (nameValue.length == 2 && nameValue[0].equals(name)) {
-				return nameValue[1];
-			}
-		}
-
-		return null;
-	}
+        return null;
+    }
 }

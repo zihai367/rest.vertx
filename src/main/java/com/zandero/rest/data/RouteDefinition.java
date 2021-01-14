@@ -6,24 +6,21 @@ import com.zandero.rest.context.ContextProvider;
 import com.zandero.rest.exception.ExceptionHandler;
 import com.zandero.rest.reader.ValueReader;
 import com.zandero.rest.writer.HttpResponseWriter;
-import com.zandero.utils.ArrayUtils;
-import com.zandero.utils.Assert;
-import com.zandero.utils.StringUtils;
-import io.vertx.core.Future;
+import com.zandero.utils.*;
+import io.vertx.core.*;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.ext.web.RoutingContext;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.slf4j.*;
 
-import javax.annotation.security.DenyAll;
-import javax.annotation.security.PermitAll;
-import javax.annotation.security.RolesAllowed;
+import javax.annotation.security.*;
 import javax.ws.rs.*;
 import javax.ws.rs.core.Context;
-import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.*;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.*;
 import java.util.*;
+
+import static com.zandero.rest.data.ClassUtils.*;
 
 /**
  * Holds definition of a route as defined with annotations
@@ -33,6 +30,17 @@ public class RouteDefinition {
     private final static Logger log = LoggerFactory.getLogger(RouteDefinition.class);
     private static final String CONTINUATION_CLASS = "kotlin.coroutines.Continuation";
     private static final String CONTINUATION_EXPERIMENTAL_CLASS = "kotlin.coroutines.experimental.Continuation";
+
+    private static final Set<ParameterType> BODY_HANDLER_PARAMS = ArrayUtils.toSet(ParameterType.body,
+                                                                                   ParameterType.bean,
+                                                                                   ParameterType.form);
+
+    private static final Set<HttpMethod> BODY_METHODS = ArrayUtils.toSet(HttpMethod.GET,
+                                                                         HttpMethod.DELETE,
+                                                                         HttpMethod.POST,
+                                                                         HttpMethod.PUT,
+                                                                         HttpMethod.PATCH,
+                                                                         HttpMethod.TRACE);
 
     private final String DELIMITER = "/";
 
@@ -45,6 +53,11 @@ public class RouteDefinition {
      * Path part given on method
      */
     protected String methodPath = null;
+
+    /**
+     *
+     */
+    protected String applicationPath = null;
 
     /**
      * Original path as given in annotation
@@ -129,11 +142,16 @@ public class RouteDefinition {
     public RouteDefinition(Class clazz) {
 
         init(clazz.getAnnotations());
+        evaluatePath();
     }
 
     public RouteDefinition(RouteDefinition base, Method classMethod) {
 
         // copy base route
+        if (base.getApplicationPath() != null) {
+            applicationPath(base.getApplicationPath());
+        }
+
         path(base.getPath());
 
         consumes = base.getConsumes();
@@ -161,6 +179,7 @@ public class RouteDefinition {
         params = join(params, pathParams);
 
         setArguments(classMethod);
+        evaluatePath();
     }
 
     public RouteDefinition(RoutingContext context) {
@@ -179,6 +198,8 @@ public class RouteDefinition {
         if (accept != null) {
             produces = new MediaType[]{accept};
         }
+
+        evaluatePath();
     }
 
     public RouteDefinition join(RouteDefinition additional) {
@@ -207,11 +228,11 @@ public class RouteDefinition {
             suppressCheck = additional.suppressCheck;
         }
 
-        if (roles == null) {
+        if (roles == null && permitAll == null) {
             roles = additional.roles;
         }
 
-        if (permitAll == null) {
+        if (permitAll == null && roles == null) {
             permitAll = additional.permitAll;
             roles = null;
         }
@@ -234,6 +255,11 @@ public class RouteDefinition {
 
         // path change
         boolean pathChange = false;
+
+        if (applicationPath == null && additional.applicationPath != null) {
+            applicationPath = additional.applicationPath;
+        }
+
         if (classPath == null && additional.classPath != null) {
             pathChange = true;
             classPath = additional.classPath;
@@ -246,7 +272,6 @@ public class RouteDefinition {
 
         if (pathChange) { // reset and re-evaluate path
             path = DELIMITER;
-            routePath = null;
 
             path(classPath);
             path(methodPath);
@@ -258,7 +283,7 @@ public class RouteDefinition {
 
         // join collected params to base params
         params = join(params, additional.params);
-        return this;
+        return evaluatePath();
     }
 
 
@@ -319,19 +344,7 @@ public class RouteDefinition {
 
     private static MediaType[] join(MediaType[] base, MediaType[] additional) {
 
-        if (additional == null || additional.length == 0) {
-            return base;
-        }
-
-        if (base == null) {
-            return additional;
-        }
-
-        Set<MediaType> baseSet = new LinkedHashSet<>(Arrays.asList(base));
-        Set<MediaType> addSet = new LinkedHashSet<>(Arrays.asList(additional));
-        baseSet.addAll(addSet);
-
-        return baseSet.toArray(new MediaType[]{});
+        return MediaTypeHelper.join(base, additional);
     }
 
     /**
@@ -345,6 +358,10 @@ public class RouteDefinition {
 
             if (annotation instanceof RouteOrder) {
                 order(((RouteOrder) annotation).value());
+            }
+
+            if (annotation instanceof ApplicationPath) {
+                applicationPath(((ApplicationPath) annotation).value());
             }
 
             if (annotation instanceof Path) {
@@ -434,7 +451,7 @@ public class RouteDefinition {
 
             if (annotation instanceof CatchWith) {
                 exceptionHandlers =
-                        ArrayUtils.join(((CatchWith) annotation).value(), exceptionHandlers); // method handler is applied before class handler
+                    ArrayUtils.join(((CatchWith) annotation).value(), exceptionHandlers); // method handler is applied before class handler
             }
 
             if (annotation instanceof SuppressCheck) {
@@ -482,6 +499,12 @@ public class RouteDefinition {
         return this;
     }
 
+    private RouteDefinition applicationPath(String appPath) {
+        Assert.notNullOrEmptyTrimmed(appPath, "Missing or empty application path '@ApplicationPath'!");
+        applicationPath = PathConverter.clean(DELIMITER + appPath);
+        return this;
+    }
+
     public RouteDefinition path(String subPath) {
 
         Assert.notNullOrEmptyTrimmed(subPath, "Missing or empty route '@Path'!");
@@ -509,18 +532,26 @@ public class RouteDefinition {
             methodPath = subPath;
         }
 
-        // convert path to Vert.X format
-        routePath = PathConverter.convert(path);
         return this;
     }
 
+    private RouteDefinition evaluatePath() {
+        String pathToConvert = path;
+        if (applicationPath != null && !applicationPath.equals(DELIMITER)) {
+            pathToConvert = applicationPath + path;
+        }
+
+        // convert path to Vert.X format
+        routePath = PathConverter.convert(pathToConvert);
+        return this;
+    }
 
     public RouteDefinition consumes(String[] value) {
 
         Assert.notNullOrEmpty(value, "Missing '@Consumes' definition!");
 
         MediaType[] values = MediaTypeHelper.getMediaTypes(value);
-        if (!MediaTypeHelper.isDefaultMediaType(values)) {
+        if (MediaTypeHelper.notDefaultMediaType(values)) {
             consumes = values;
         }
         return this;
@@ -530,7 +561,7 @@ public class RouteDefinition {
 
         Assert.notNullOrEmpty(value, "Missing '@Produces' definition!");
         MediaType[] values = MediaTypeHelper.getMediaTypes(value);
-        if (!MediaTypeHelper.isDefaultMediaType(values)) {
+        if (MediaTypeHelper.notDefaultMediaType(values)) {
             produces = MediaTypeHelper.getMediaTypes(value);
         }
         return this;
@@ -606,6 +637,10 @@ public class RouteDefinition {
                     raw = true;
                 }
 
+                if (annotation instanceof BodyParam) {
+                    type = ParameterType.body;
+                }
+
                 if (annotation instanceof FormParam) {
                     type = ParameterType.form;
                     name = ((FormParam) annotation).value();
@@ -660,15 +695,15 @@ public class RouteDefinition {
                     Assert.isNull(param.getDataType(), "Duplicate argument type given: " + parameters[index].getName());
                     param.argument(parameterTypes[index], index); // set missing argument type and index
                 } else {
+                    name = parameters[index].getName();
+                    type = ParameterType.unknown;
 
+                    // Body reader only .... (as we don't know param name we assume it is the body)
                     if (valueReader == null) {
                         valueReader = reader; // take reader from method / class definition
                     } else {
                         reader = valueReader; // set body reader from field
                     }
-
-                    name = parameters[index].getName();
-                    type = ParameterType.unknown;
                 }
             }
 
@@ -677,8 +712,8 @@ public class RouteDefinition {
 
                 // set context provider from method annotation if fitting
                 if (contextValueProvider == null && contextProvider != null) {
-                    Type generic = ClassFactory.getGenericType(contextProvider);
-                    if (ClassFactory.checkIfCompatibleTypes(parameterTypes[index], generic)) {
+                    Type generic = getGenericType(contextProvider);
+                    if (checkIfCompatibleType(parameterTypes[index], generic)) {
                         contextValueProvider = contextProvider;
                     }
                 }
@@ -699,7 +734,7 @@ public class RouteDefinition {
      */
     static boolean isAsync(Class<?> returnType) {
 
-        return ClassFactory.checkIfCompatibleTypes(returnType, Future.class);
+        return checkIfCompatibleTypes(returnType, Future.class, Promise.class);
     }
 
     /**
@@ -717,7 +752,7 @@ public class RouteDefinition {
         String lastParameterType = parameterTypes[parameterTypes.length - 1].getName();
 
         return lastParameterType.equals(CONTINUATION_CLASS)
-                || lastParameterType.equals(CONTINUATION_EXPERIMENTAL_CLASS);
+                   || lastParameterType.equals(CONTINUATION_EXPERIMENTAL_CLASS);
     }
 
     private void setUsedArguments(Map<String, MethodParameter> arguments) {
@@ -772,7 +807,7 @@ public class RouteDefinition {
 
 
         Assert.notNull(type,
-                "Argument: " + name + " (" + parameterType + ") can't be provided with Vert.x request, check and annotate method arguments!");
+                       "Argument: " + name + " (" + parameterType + ") can't be provided with Vert.x request, check and annotate method arguments!");
 
         if (ParameterType.path.equals(type)) {
             MethodParameter found = params.get(name); // parameter should exist
@@ -798,46 +833,31 @@ public class RouteDefinition {
         return newParam;
     }
 
-    public String getPath() {
+    public String getApplicationPath() {
+        return applicationPath;
+    }
 
+    public String getPath() {
         return path;
     }
 
     public String getRoutePath() {
-
-		/*if (pathIsRegEx()) {
-			return regExPathEscape(routePath);
-		}*/
-
         return routePath;
     }
 
-    private String regExPathEscape(String path) {
-
-        if (path == null) {
-            return null;
-        }
-
-        return path.replaceAll("/", "\\\\/");
-    }
-
     public MediaType[] getConsumes() {
-
         return consumes;
     }
 
     public MediaType[] getProduces() {
-
         return produces;
     }
 
     public HttpMethod getMethod() {
-
         return method;
     }
 
     public int getOrder() {
-
         return order;
     }
 
@@ -863,7 +883,6 @@ public class RouteDefinition {
     }
 
     public Class<?> getReturnType() {
-
         return returnType;
     }
 
@@ -878,20 +897,17 @@ public class RouteDefinition {
         return list;
     }
 
-    public boolean requestHasBody() {
+    public boolean requestCanHaveBody() {
+        return BODY_METHODS.contains(method);
+    }
 
-        // https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods/
-        // also see:
-        // https://www.owasp.org/index.php/Test_HTTP_Methods_(OTG-CONFIG-006)
-        return HttpMethod.DELETE.equals(method) ||
-                HttpMethod.POST.equals(method) ||
-                HttpMethod.PUT.equals(method) ||
-                HttpMethod.PATCH.equals(method) ||
-                HttpMethod.TRACE.equals(method);
+    public boolean requestHasBody() {
+        return requestCanHaveBody() &&
+                   params.values().stream().filter(param -> BODY_HANDLER_PARAMS.contains(param.getType()))
+                       .findFirst().orElse(null) != null;
     }
 
     public boolean hasBodyParameter() {
-
         return getBodyParameter() != null;
     }
 
@@ -901,7 +917,8 @@ public class RouteDefinition {
             return null;
         }
 
-        return params.values().stream().filter(param -> ParameterType.body.equals(param.getType())).findFirst().orElse(null);
+        return params.values().stream().filter(param -> ParameterType.body.equals(param.getType()))
+                   .findFirst().orElse(null);
     }
 
     public boolean hasCookies() {
@@ -945,7 +962,6 @@ public class RouteDefinition {
      * @return true - permit all, false - deny all, null - check roles
      */
     public Boolean getPermitAll() {
-
         return permitAll;
     }
 
@@ -953,7 +969,6 @@ public class RouteDefinition {
      * @return null - no roles defined, or array of allowed roles
      */
     public String[] getRoles() {
-
         return roles;
     }
 
@@ -961,7 +976,6 @@ public class RouteDefinition {
      * @return true to check if User is in given role, false otherwise
      */
     public boolean checkSecurity() {
-
         return permitAll != null || (roles != null && roles.length > 0);
     }
 

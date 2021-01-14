@@ -1,25 +1,15 @@
 package com.zandero.rest.data;
 
 import com.zandero.rest.exception.ClassFactoryException;
-import com.zandero.rest.exception.WebApplicationExceptionHandler;
-import com.zandero.rest.reader.DummyBodyReader;
-import com.zandero.rest.reader.IntegerBodyReader;
-import com.zandero.rest.test.data.IntegerHolder;
-import com.zandero.rest.test.data.MyEnum;
-import com.zandero.rest.test.data.MyOtherEnum;
-import com.zandero.rest.test.data.SimulatedUser;
-import com.zandero.rest.test.handler.IllegalArgumentExceptionHandler;
+import com.zandero.rest.test.data.*;
 import com.zandero.rest.test.json.Dummy;
 import com.zandero.utils.Pair;
-import io.vertx.ext.auth.AbstractUser;
+import io.vertx.core.http.*;
+import io.vertx.ext.web.RoutingContext;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
-import javax.ws.rs.NotAllowedException;
-import javax.ws.rs.WebApplicationException;
-import java.lang.reflect.Type;
-
-import static com.zandero.rest.data.ClassFactory.constructViaConstructor;
-import static com.zandero.rest.data.ClassFactory.constructViaMethod;
+import static com.zandero.rest.data.ClassFactory.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 
@@ -28,60 +18,7 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class ClassFactoryTest {
 
-    @Test
-    void getGenericTypeTest() {
 
-        assertNull(ClassFactory.getGenericType(DummyBodyReader.class)); // type erasure ... we can't tell
-
-        assertEquals(Integer.class, ClassFactory.getGenericType(IntegerBodyReader.class)); // at least we know so much
-
-        assertEquals(IllegalArgumentException.class, ClassFactory.getGenericType(IllegalArgumentExceptionHandler.class)); // at least we know so much
-
-        assertEquals(WebApplicationException.class, ClassFactory.getGenericType(WebApplicationExceptionHandler.class)); // at least we know so much
-    }
-
-    @Test
-    void typeAreCompatibleTest() {
-
-        Type type = ClassFactory.getGenericType(NumberFormatException.class);
-        try {
-            ClassFactory.checkIfCompatibleTypes(IllegalArgumentException.class, type, "Fail");
-        } catch (Exception e) {
-            fail(e.getMessage());
-        }
-    }
-
-    @Test
-    void inheritedTypeAreCompatibleTest() {
-
-        Type type = ClassFactory.getGenericType(WebApplicationExceptionHandler.class);
-        ClassFactory.checkIfCompatibleTypes(WebApplicationException.class, type, "Fail");
-        ClassFactory.checkIfCompatibleTypes(NotAllowedException.class, type, "Fail");
-    }
-
-    @Test
-    void convertPrimitiveTypes() {
-
-        assertEquals(1, ClassFactory.stringToPrimitiveType("1", int.class));
-        assertEquals(false, ClassFactory.stringToPrimitiveType("FALSE", boolean.class));
-        assertEquals('a', ClassFactory.stringToPrimitiveType("a", char.class));
-        assertEquals((short) 100, ClassFactory.stringToPrimitiveType("100", short.class));
-        assertEquals(100_100_100L, ClassFactory.stringToPrimitiveType("100100100", long.class));
-        assertEquals((float) 100100.98, ClassFactory.stringToPrimitiveType("100100.98", float.class));
-        assertEquals(100100.987, ClassFactory.stringToPrimitiveType("100100.987", double.class));
-    }
-
-    @Test
-    void convertNullableTypes() {
-
-        assertEquals(1, ClassFactory.stringToPrimitiveType("1", Integer.class));
-        assertEquals(false, ClassFactory.stringToPrimitiveType("FALSE", Boolean.class));
-        assertEquals('a', ClassFactory.stringToPrimitiveType("a", Character.class));
-        assertEquals((short) 100, ClassFactory.stringToPrimitiveType("100", Short.class));
-        assertEquals(100_100_100L, ClassFactory.stringToPrimitiveType("100100100", Long.class));
-        assertEquals((float) 100100.98, ClassFactory.stringToPrimitiveType("100100.98", Float.class));
-        assertEquals(100100.987, ClassFactory.stringToPrimitiveType("100100.987", Double.class));
-    }
 
     @Test
     void constructTypeTest() throws ClassFactoryException {
@@ -155,8 +92,38 @@ class ClassFactoryTest {
     }
 
     @Test
-    void checkIfCompatibleTypes() {
+    void constructViaContext() throws ClassFactoryException {
 
-        assertTrue(ClassFactory.checkIfCompatibleTypes(SimulatedUser.class, AbstractUser.class));
+        RoutingContext context = Mockito.mock(RoutingContext.class);
+        HttpServerRequest request = Mockito.mock(HttpServerRequest.class);
+
+        Mockito.when(context.request()).thenReturn(request);
+        Mockito.when(request.getParam("path")).thenReturn("SomePath");
+        Mockito.when(request.getHeader("MyHeader")).thenReturn("true");
+        Mockito.when(request.query()).thenReturn("query=1");
+        Mockito.when(request.getCookie("chocolate")).thenReturn(Cookie.cookie("chocolate", "tasty"));
+
+        MyComplexBean instance = (MyComplexBean) ClassFactory.newInstanceOf(MyComplexBean.class, context);
+        assertNotNull(instance);
+        assertEquals("Header: true, Path: SomePath, Query: 1, Cookie: tasty, Matrix: null", instance.toString());
+    }
+
+    @Test
+    void constructViaContextFail() throws ClassFactoryException {
+
+        RoutingContext context = Mockito.mock(RoutingContext.class);
+        HttpServerRequest request = Mockito.mock(HttpServerRequest.class);
+
+        Mockito.when(context.request()).thenReturn(request);
+        Mockito.when(request.getParam("path")).thenReturn("SomePath");
+        Mockito.when(request.getHeader("MyHeader")).thenReturn("BLA"); // invalid type
+        Mockito.when(request.query()).thenReturn("query=A"); // invalid type
+        Mockito.when(request.getCookie("chocolate")).thenReturn(Cookie.cookie("chocolate", "tasty"));
+
+        ClassFactoryException ex = assertThrows(ClassFactoryException.class, () -> ClassFactory.newInstanceOf(MyComplexBean.class, context));
+        assertEquals("Failed to instantiate class, with constructor: " +
+                         "com.zandero.rest.test.data.MyComplexBean(String arg0=SomePath, boolean arg1=BLA, int arg2=A, String arg3=tasty). " +
+                         "Failed to convert value: 'A', to primitive type: int",
+                     ex.getMessage());
     }
 }

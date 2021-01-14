@@ -4,16 +4,14 @@ import com.zandero.rest.injection.InjectionProvider;
 import io.vertx.core.Vertx;
 import io.vertx.ext.web.client.WebClient;
 import io.vertx.junit5.VertxTestContext;
-import org.junit.Ignore;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.*;
 
 import javax.validation.Validator;
 
 /**
  *
  */
-@Ignore
+@Disabled
 public class VertxTest {
 
     public static final String API_ROOT = "/";
@@ -22,16 +20,14 @@ public class VertxTest {
 
     public static final String HOST = "localhost";
 
-    protected static final String ROOT_PATH = "http://" + HOST + ":" + PORT;
-
     protected static Vertx vertx = null;
-    protected static VertxTestContext VertxTestContext;
+    protected static VertxTestContext vertxTestContext;
     protected static WebClient client;
 
     public static void before() {
 
         vertx = Vertx.vertx();
-        VertxTestContext = new VertxTestContext();
+        vertxTestContext = new VertxTestContext();
 
         // clear all registered writers or reader and handlers
         RestRouter.getReaders().clear();
@@ -48,7 +44,7 @@ public class VertxTest {
 
     @AfterEach
     void lastChecks(Vertx vertx) {
-        vertx.close(VertxTestContext.succeeding());
+        vertx.close(vertxTestContext.succeeding());
     }
 
     @AfterAll
